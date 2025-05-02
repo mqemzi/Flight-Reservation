@@ -1,121 +1,208 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, simpledialog
 from database import FlightDatabase
-import sqlite3
 from datetime import datetime
+import re
 
 class BookingPage:
     def __init__(self, master):
         self.master = master
         master.title("Book a Flight")
-        master.geometry("500x600")
+        master.geometry("600x700")
         master.configure(bg='#f0f0f0')
 
         # Database connection
         self.db = FlightDatabase()
 
-        # Title
-        title_label = tk.Label(master, text="Flight Booking", 
-                               font=("Arial", 18, "bold"), 
-                               bg='#f0f0f0', fg='#333333')
-        title_label.pack(pady=20)
+        # Configure grid layout
+        master.grid_columnconfigure(0, weight=1)
 
-        # Booking Form Frame
+        # Header
+        header_frame = tk.Frame(master, bg='#2196F3', height=100)
+        header_frame.grid(row=0, column=0, sticky='ew')
+        header_frame.grid_propagate(False)
+
+        # Title
+        title_label = tk.Label(header_frame, text="Book a Flight", 
+                               font=("Arial", 24, "bold"), 
+                               bg='#2196F3', fg='white')
+        title_label.place(relx=0.5, rely=0.5, anchor='center')
+
+        # Form Frame
         form_frame = tk.Frame(master, bg='#f0f0f0')
-        form_frame.pack(padx=30, fill='x')
+        form_frame.grid(row=1, column=0, padx=50, pady=30, sticky='nsew')
+        form_frame.grid_columnconfigure(1, weight=1)
 
         # Input Fields
-        labels = ["Name", "Email", "Flight Number", "Origin", "Destination", "Departure Date"]
+        input_fields = [
+            ("Name", "Enter full name"),
+            ("Flight Number", "e.g. FL001"),
+            ("Departure", "City of departure"),
+            ("Destination", "City of arrival"),
+            ("Date", "YYYY-MM-DD"),
+            ("Seat Number", "e.g. 12A, 15B")
+        ]
+
         self.entries = {}
+        validation_funcs = {
+            "Name": self.validate_name,
+            "Flight Number": self.validate_flight_number,
+            "Departure": self.validate_location,
+            "Destination": self.validate_location,
+            "Date": self.validate_date,
+            "Seat Number": self.validate_seat_number
+        }
 
-        for label_text in labels:
-            row_frame = tk.Frame(form_frame, bg='#f0f0f0')
-            row_frame.pack(fill='x', pady=5)
+        for row, (label_text, placeholder) in enumerate(input_fields):
+            label = tk.Label(form_frame, text=label_text, 
+                             font=("Arial", 12), 
+                             bg='#f0f0f0', fg='#333333', anchor='w')
+            label.grid(row=row, column=0, sticky='w', padx=(0,10), pady=10)
 
-            label = tk.Label(row_frame, text=label_text, width=15, anchor='w', 
-                             bg='#f0f0f0', font=("Arial", 10))
-            label.pack(side='left')
+            entry = tk.Entry(form_frame, width=40, 
+                             font=("Arial", 12), 
+                             relief=tk.FLAT, 
+                             highlightthickness=1, 
+                             highlightcolor='#2196F3')
+            entry.grid(row=row, column=1, sticky='ew', pady=10)
+            entry.insert(0, placeholder)
+            entry.bind('<FocusIn>', lambda e, entry=entry: self.on_entry_click(e, entry))
+            entry.bind('<FocusOut>', lambda e, entry=entry, label=label_text: self.on_entry_leave(e, entry, label))
+            entry.bind('<KeyRelease>', lambda e, label=label_text: self.validate_input(e, label))
 
-            entry = tk.Entry(row_frame, width=30, font=("Arial", 10))
-            entry.pack(side='right')
             self.entries[label_text] = entry
 
-        # Available Flights Section
-        available_flights_label = tk.Label(master, text="Available Flights", 
-                                           font=("Arial", 12, "bold"), 
-                                           bg='#f0f0f0', fg='#333333')
-        available_flights_label.pack(pady=10)
+        # Submit Button
+        submit_button = tk.Button(form_frame, text="Book Reservation", 
+                                  command=self.submit_reservation,
+                                  width=30, height=2, 
+                                  bg='#4CAF50', fg='white', 
+                                  font=("Arial", 14, "bold"), 
+                                  relief=tk.FLAT)
+        submit_button.grid(row=len(input_fields), column=0, columnspan=2, pady=20)
 
-        # Treeview for Available Flights
-        self.flights_tree = ttk.Treeview(master, columns=('Flight', 'Origin', 'Destination', 'Departure'), show='headings')
-        self.flights_tree.heading('Flight', text='Flight Number')
-        self.flights_tree.heading('Origin', text='Origin')
-        self.flights_tree.heading('Destination', text='Destination')
-        self.flights_tree.heading('Departure', text='Departure Date')
-        self.flights_tree.pack(padx=20, fill='x')
+    def on_entry_click(self, event, entry):
+        """Remove placeholder text when entry is clicked"""
+        if entry.get() in ["Enter full name", "e.g. FL001", "City of departure", 
+                           "City of arrival", "YYYY-MM-DD", "e.g. 12A, 15B"]:
+            entry.delete(0, tk.END)
+            entry.config(fg='black')
 
-        # Populate Available Flights
-        self.populate_available_flights()
+    def on_entry_leave(self, event, entry, label):
+        """Restore placeholder if no text is entered"""
+        if entry.get().strip() == "":
+            placeholders = {
+                "Name": "Enter full name",
+                "Flight Number": "e.g. FL001",
+                "Departure": "City of departure",
+                "Destination": "City of arrival",
+                "Date": "YYYY-MM-DD",
+                "Seat Number": "e.g. 12A, 15B"
+            }
+            entry.insert(0, placeholders[label])
+            entry.config(fg='gray')
 
-        # Book Button
-        book_button = tk.Button(master, text="Book Flight", 
-                                command=self.book_flight,
-                                width=20, height=2, 
-                                bg='#4CAF50', fg='white', 
-                                font=("Arial", 12, "bold"))
-        book_button.pack(pady=20)
+    def validate_input(self, event, label):
+        """Validate input in real-time"""
+        validation_funcs = {
+            "Name": self.validate_name,
+            "Flight Number": self.validate_flight_number,
+            "Departure": self.validate_location,
+            "Destination": self.validate_location,
+            "Date": self.validate_date,
+            "Seat Number": self.validate_seat_number
+        }
+        validation_funcs[label]()
 
-    def populate_available_flights(self):
-        # Clear existing items
-        for item in self.flights_tree.get_children():
-            self.flights_tree.delete(item)
+    def validate_name(self):
+        name = self.entries["Name"].get().strip()
+        if not name or len(name.split()) < 2:
+            self.entries["Name"].config(fg='red')
+            return False
+        self.entries["Name"].config(fg='green')
+        return True
 
-        # Get available flights from database
-        flights = self.db.get_available_flights()
-        for flight in flights:
-            self.flights_tree.insert('', 'end', values=(
-                flight[1],  # flight_number
-                flight[2],  # origin
-                flight[3],  # destination
-                flight[4]   # departure_time
-            ))
+    def validate_flight_number(self):
+        flight_number = self.entries["Flight Number"].get().strip()
+        pattern = r'^FL\d{3}$'
+        if not re.match(pattern, flight_number):
+            self.entries["Flight Number"].config(fg='red')
+            return False
+        self.entries["Flight Number"].config(fg='green')
+        return True
 
-    def book_flight(self):
-        # Validate input
-        required_fields = ["Name", "Email", "Flight Number"]
-        for field in required_fields:
-            if not self.entries[field].get().strip():
-                messagebox.showerror("Error", f"{field} is required")
-                return
+    def validate_location(self, field="Departure"):
+        location = self.entries[field].get().strip()
+        if not location or len(location) < 2:
+            self.entries[field].config(fg='red')
+            return False
+        self.entries[field].config(fg='green')
+        return True
 
-        # Find flight ID based on flight number
-        flight_number = self.entries["Flight Number"].get()
-        
+    def validate_date(self):
+        date_str = self.entries["Date"].get().strip()
         try:
-            # Make reservation
-            result = self.db.make_reservation(
-                flight_id=self.get_flight_id(flight_number),
-                passenger_name=self.entries["Name"].get(),
-                passenger_email=self.entries["Email"].get()
-            )
+            date = datetime.strptime(date_str, '%Y-%m-%d')
+            if date < datetime.now():
+                self.entries["Date"].config(fg='red')
+                return False
+            self.entries["Date"].config(fg='green')
+            return True
+        except ValueError:
+            self.entries["Date"].config(fg='red')
+            return False
 
-            if result:
-                messagebox.showinfo("Success", "Flight booked successfully!")
-                # Refresh available flights
-                self.populate_available_flights()
-                # Clear entries
-                for entry in self.entries.values():
-                    entry.delete(0, tk.END)
-            else:
-                messagebox.showerror("Error", "Unable to book flight. Flight might be full.")
+    def validate_seat_number(self):
+        seat_number = self.entries["Seat Number"].get().strip()
+        pattern = r'^\d{1,2}[A-F]$'
+        if not re.match(pattern, seat_number):
+            self.entries["Seat Number"].config(fg='red')
+            return False
+        self.entries["Seat Number"].config(fg='green')
+        return True
 
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+    def submit_reservation(self):
+        # Validate all inputs
+        validation_results = [
+            self.validate_name(),
+            self.validate_flight_number(),
+            self.validate_location("Departure"),
+            self.validate_location("Destination"),
+            self.validate_date(),
+            self.validate_seat_number()
+        ]
 
-    def get_flight_id(self, flight_number):
-        # Fetch flight ID from database
-        self.db.cursor.execute('SELECT flight_id FROM flights WHERE flight_number = ?', (flight_number,))
-        result = self.db.cursor.fetchone()
+        if not all(validation_results):
+            messagebox.showerror("Validation Error", "Please correct the highlighted fields")
+            return
+
+        # Get validated inputs
+        name = self.entries["Name"].get().strip()
+        flight_number = self.entries["Flight Number"].get().strip()
+        departure = self.entries["Departure"].get().strip()
+        destination = self.entries["Destination"].get().strip()
+        date = self.entries["Date"].get().strip()
+        seat_number = self.entries["Seat Number"].get().strip()
+
+        # Add reservation to database
+        result = self.db.add_reservation(name, flight_number, departure, destination, date, seat_number)
+
         if result:
-            return result[0]
-        raise ValueError(f"Flight {flight_number} not found")
+            messagebox.showinfo("Success", "Reservation added successfully")
+            # Clear entries after successful booking
+            for entry in self.entries.values():
+                entry.delete(0, tk.END)
+                placeholders = {
+                    "Name": "Enter full name",
+                    "Flight Number": "e.g. FL001",
+                    "Departure": "City of departure",
+                    "Destination": "City of arrival",
+                    "Date": "YYYY-MM-DD",
+                    "Seat Number": "e.g. 12A, 15B"
+                }
+                entry.insert(0, placeholders[entry.cget('text')])
+                entry.config(fg='gray')
+        else:
+            messagebox.showerror("Error", "Failed to add reservation. Seat might be already taken.")
+
+
